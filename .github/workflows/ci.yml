@@ -1,6 +1,11 @@
 name: Release repository checks
 on:
   workflow_dispatch:
+    inputs:
+      sdk_tag:
+        description: Published SDK release to verify
+        default: sdk-v1.0.0
+        type: string
   push:
     branches: [main]
   pull_request:
@@ -19,3 +24,31 @@ jobs:
           git diff --check
           test -s README.md
           test -s LICENSE
+  sdk-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify the published seven-platform SDK inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_TAG: ${{ inputs.sdk_tag || 'sdk-v1.0.0' }}
+        run: |
+          set -euo pipefail
+          mkdir sdk-metadata
+          gh release view "$SDK_TAG" --repo "$GITHUB_REPOSITORY" --json assets > sdk-metadata/release.json
+          for target in \
+            aarch64-apple-darwin \
+            aarch64-pc-windows-msvc \
+            x86_64-pc-windows-msvc \
+            aarch64-unknown-linux-gnu \
+            x86_64-unknown-linux-gnu \
+            aarch64-unknown-linux-musl \
+            x86_64-unknown-linux-musl; do
+            for suffix in tar.gz manifest.json; do
+              name="respire-core-sdk-${target}.${suffix}"
+              jq -e --arg name "$name" 'any(.assets[]; .name == $name and .size > 0)' sdk-metadata/release.json > /dev/null
+            done
+          done
+          jq -e 'any(.assets[]; .name == "SHA256SUMS" and .size > 0)' sdk-metadata/release.json > /dev/null
+          gh release download "$SDK_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern '*.manifest.json' --pattern SHA256SUMS --dir sdk-metadata
+          (cd sdk-metadata && sha256sum --check --ignore-missing SHA256SUMS)
