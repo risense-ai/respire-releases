@@ -168,12 +168,13 @@ async function main() {
       const flags = release.prerelease ? ['--prerelease'] : [];
       gh(['release', 'create', release.tag_name, '--repo', DESTINATION, '--draft',
         '--title', release.tag_name, '--notes', `${marker}\n\nVerified seven-platform CLI distribution.`, ...flags]);
-      mirror = api(`repos/${DESTINATION}/releases/tags/${release.tag_name}`);
+      mirror = existingRelease(release.tag_name);
+      check(mirror?.draft && mirror.body?.includes(marker), 'Created mirror draft is unavailable');
     }
     const existing = verifyExisting(mirror, assets, false);
     const missing = names.filter(name => !existing.has(name)).map(name => join(directory, name));
     if (missing.length) gh(['release', 'upload', release.tag_name, ...missing, '--repo', DESTINATION]);
-    mirror = api(`repos/${DESTINATION}/releases/tags/${release.tag_name}`);
+    mirror = api(`repos/${DESTINATION}/releases/${mirror.id}`);
     verifyExisting(mirror, assets, true);
     const current = api(`repos/${SOURCE}/releases/${release.id}`);
     check(!current.draft && current.tag_name === release.tag_name
@@ -184,7 +185,7 @@ async function main() {
       : api(`repos/${SOURCE}/releases/latest`).id === release.id;
     gh(['release', 'edit', release.tag_name, '--repo', DESTINATION, '--draft=false',
       `--prerelease=${release.prerelease}`, `--latest=${latest}`]);
-    const published = api(`repos/${DESTINATION}/releases/tags/${release.tag_name}`);
+    const published = api(`repos/${DESTINATION}/releases/${mirror.id}`);
     check(!published.draft && published.prerelease === release.prerelease, 'Mirror was not published correctly');
     verifyExisting(published, assets, true);
     Object.assign(report, {passed: true, outcome: 'published', mirror_release_id: published.id});
