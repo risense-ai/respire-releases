@@ -165,11 +165,13 @@ async function main() {
       check(mirror.body?.includes(marker) && mirror.prerelease === release.prerelease,
         'Existing draft does not belong to this source distribution');
     } else {
-      const flags = release.prerelease ? ['--prerelease'] : [];
-      gh(['release', 'create', release.tag_name, '--repo', DESTINATION, '--draft',
-        '--title', release.tag_name, '--notes', `${marker}\n\nVerified seven-platform CLI distribution.`, ...flags]);
-      mirror = existingRelease(release.tag_name);
-      check(mirror?.draft && mirror.body?.includes(marker), 'Created mirror draft is unavailable');
+      mirror = JSON.parse(gh(['api', '--method', 'POST', `repos/${DESTINATION}/releases`,
+        '-f', `tag_name=${release.tag_name}`, '-f', `name=${release.tag_name}`,
+        '-f', `body=${marker}\n\nVerified seven-platform CLI distribution.`,
+        '-F', 'draft=true', '-F', `prerelease=${release.prerelease}`]));
+      check(Number.isSafeInteger(mirror.id) && mirror.draft
+        && mirror.tag_name === release.tag_name && mirror.body?.includes(marker),
+      'Created mirror draft identity is invalid');
     }
     const existing = verifyExisting(mirror, assets, false);
     const missing = names.filter(name => !existing.has(name)).map(name => join(directory, name));
