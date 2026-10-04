@@ -97,6 +97,33 @@ function verifyExisting(release, sourceAssets, complete) {
   return seen;
 }
 
+function currentSource(release, assets, sha) {
+  const current = api(`repos/${SOURCE}/releases/${release.id}`);
+  check(!current.draft && current.tag_name === release.tag_name
+    && current.target_commitish === sha
+    && current.prerelease === release.prerelease, 'Source release changed during mirroring');
+  verifyExisting(current, assets, true);
+  return current;
+}
+
+function mirrorNotes(release, sha) {
+  check(release.body == null || typeof release.body === 'string', 'Source release notes are invalid');
+  return `CLI source: ${SOURCE}@${sha}\n\nVerified seven-platform CLI distribution.`
+    + (release.body ? `\n\n${release.body}` : '');
+}
+
+function synchronizeNotes(mirror, source, sha, root) {
+  const body = mirrorNotes(source, sha);
+  if (mirror.body === body) return mirror;
+  const file = join(root, 'release-notes.md');
+  writeFileSync(file, body, 'utf8');
+  gh(['release', 'edit', mirror.tag_name, '--repo', DESTINATION, '--notes-file', file]);
+  const updated = api(`repos/${DESTINATION}/releases/${mirror.id}`);
+  check(updated.body === body && updated.draft === mirror.draft
+    && updated.prerelease === mirror.prerelease, 'Mirror release notes were not synchronized correctly');
+  return updated;
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (['--verify-directory', '--verify-metadata-directory'].includes(args[0])) {
@@ -151,7 +178,11 @@ async function main() {
       verifyBuildMetadata(release, manifest, directory);
       check(mirror.prerelease === release.prerelease, 'Published mirror channel conflicts');
       verifyExisting(mirror, assets, true);
-      Object.assign(report, {passed: true, outcome: 'unchanged',
+      const current = currentSource(release, assets, sha);
+      const notesChanged = mirror.body !== mirrorNotes(current, sha);
+      mirror = synchronizeNotes(mirror, current, sha, root);
+      verifyExisting(mirror, assets, true);
+      Object.assign(report, {passed: true, outcome: notesChanged ? 'notes_updated' : 'unchanged',
         verified_build_metadata_count: TARGETS.length,
         matching_asset_count: assets.size, mirror_release_id: mirror.id});
       return;
@@ -165,12 +196,15 @@ async function main() {
       check(mirror.body?.includes(marker) && mirror.prerelease === release.prerelease,
         'Existing draft does not belong to this source distribution');
     } else {
+      const file = join(root, 'release-notes.md');
+      const body = mirrorNotes(release, validated.source_sha);
+      writeFileSync(file, body, 'utf8');
       mirror = JSON.parse(gh(['api', '--method', 'POST', `repos/${DESTINATION}/releases`,
         '-f', `tag_name=${release.tag_name}`, '-f', `name=${release.tag_name}`,
-        '-f', `body=${marker}\n\nVerified seven-platform CLI distribution.`,
+        '-F', `body=@${file}`,
         '-F', 'draft=true', '-F', `prerelease=${release.prerelease}`]));
       check(Number.isSafeInteger(mirror.id) && mirror.draft
-        && mirror.tag_name === release.tag_name && mirror.body?.includes(marker),
+        && mirror.tag_name === release.tag_name && mirror.body === body,
       'Created mirror draft identity is invalid');
     }
     const existing = verifyExisting(mirror, assets, false);
@@ -178,11 +212,9 @@ async function main() {
     if (missing.length) gh(['release', 'upload', release.tag_name, ...missing, '--repo', DESTINATION]);
     mirror = api(`repos/${DESTINATION}/releases/${mirror.id}`);
     verifyExisting(mirror, assets, true);
-    const current = api(`repos/${SOURCE}/releases/${release.id}`);
-    check(!current.draft && current.tag_name === release.tag_name
-      && current.target_commitish === validated.source_sha
-      && current.prerelease === release.prerelease, 'Source release changed during mirroring');
-    verifyExisting(current, assets, true);
+    const current = currentSource(release, assets, validated.source_sha);
+    mirror = synchronizeNotes(mirror, current, validated.source_sha, root);
+    verifyExisting(mirror, assets, true);
     const latest = release.prerelease ? false
       : api(`repos/${SOURCE}/releases/latest`).id === release.id;
     gh(['release', 'edit', release.tag_name, '--repo', DESTINATION, '--draft=false',
