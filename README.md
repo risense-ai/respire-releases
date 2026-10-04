@@ -28,3 +28,10 @@ The npm launcher is `@rsrsai/cli`.
 Use `RSRS_LIBC=glibc` or `RSRS_LIBC=musl` to select a Linux variant. Native release assets identify their libc with the Rust target suffix `-gnu` or `-musl`.
 
 See [release assets](https://github.com/risense-ai/respire-releases/releases), [CLI](https://github.com/risense-ai/respire-cli) and [desktop client](https://github.com/risense-ai/respire-client).
+
+## License
+
+First-party material is offered under [PolyForm Noncommercial 1.0.0](LICENSE).
+Personal noncommercial use and self-hosting are permitted; commercial use,
+including internal commercial deployment, requires a separate written license.
+See [commercial licensing and component exceptions](COMMERCIAL-LICENSE.md).
