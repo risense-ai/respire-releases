@@ -30,13 +30,22 @@ function inventory(release) {
   return assets;
 }
 
+function compareVersionBase(left, right) {
+  const a = left.split('.').map(value => BigInt(value));
+  const b = right.split('.').map(value => BigInt(value));
+  for (let index = 0; index < 3; index++) {
+    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
+  }
+  return 0;
+}
+
 function verifyManifest(release, manifest) {
   check(/^v\d+\.\d+\.\d+(?:-dev\.\d+)?$/.test(release.tag_name)
     && !release.draft && Boolean(release.published_at), 'Expected a published CLI version tag');
   const version = release.tag_name.slice(1);
   check(release.prerelease === version.includes('-dev.'), 'Release channel does not match version');
   const sourceVersion = /^(\d+\.\d+\.\d+)(?:-dev\.\d+)?$/.exec(manifest.cliVersion || '');
-  check(sourceVersion && (release.prerelease ? sourceVersion[1] === version.split('-')[0]
+  check(sourceVersion && (release.prerelease ? compareVersionBase(version.split('-')[0], sourceVersion[1]) >= 0
     : manifest.cliVersion === version), 'Source packaging version base mismatch');
   check(manifest.schemaVersion === 1
     && manifest.binaryName === 'rsrs' && manifest.repository === `https://github.com/${SOURCE}`
