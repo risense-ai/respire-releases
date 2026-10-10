@@ -13,13 +13,20 @@ const check = (value, message) => { if (!value) throw new Error(message); };
 const gh = args => execFileSync('gh', args, {encoding: 'utf8', maxBuffer: 16 * 1024 * 1024});
 const api = path => JSON.parse(gh(['api', path]));
 const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-const names = TARGETS.flatMap(target => [`cli-build-${target}.json`,
+const MAINSTREAM_TARGETS = ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc',
+  'x86_64-unknown-linux-gnu', 'x86_64-unknown-linux-musl'];
+function releaseTargets(release) {
+  check(Array.isArray(release.assets), 'Missing CLI asset inventory');
+  if (release.assets.length === MAINSTREAM_TARGETS.length * 3) return MAINSTREAM_TARGETS;
+  check(release.assets.length === TARGETS.length * 3, 'Expected a complete four- or seven-platform CLI distribution');
+  return TARGETS;
+}
+const releaseNames = release => releaseTargets(release).flatMap(target => [`cli-build-${target}.json`,
   `rsrs-${target}${target.includes('windows') ? '.exe' : ''}`,
   `rsrs-${target}-runtime.tar.gz`]);
 
 function inventory(release) {
-  check(Array.isArray(release.assets) && release.assets.length === names.length,
-    'Expected exactly twenty-one CLI assets');
+  const names = releaseNames(release);
   const assets = new Map();
   for (const asset of release.assets) {
     check(names.includes(asset.name) && !assets.has(asset.name)
@@ -47,11 +54,12 @@ function verifyManifest(release, manifest) {
   const sourceVersion = /^(\d+\.\d+\.\d+)(?:-dev\.\d+)?$/.exec(manifest.cliVersion || '');
   check(sourceVersion && (release.prerelease ? compareVersionBase(version.split('-')[0], sourceVersion[1]) >= 0
     : manifest.cliVersion === version), 'Source packaging version base mismatch');
+  const targets = releaseTargets(release);
   check(manifest.schemaVersion === 1
     && manifest.binaryName === 'rsrs' && manifest.repository === `https://github.com/${SOURCE}`
-    && Array.isArray(manifest.targets) && manifest.targets.length === TARGETS.length
-    && new Set(manifest.targets.map(t => t.triple)).size === TARGETS.length
-    && manifest.targets.every(t => TARGETS.includes(t.triple)), 'Source packaging manifest mismatch');
+    && Array.isArray(manifest.targets) && manifest.targets.length === targets.length
+    && new Set(manifest.targets.map(t => t.triple)).size === targets.length
+    && manifest.targets.every(t => targets.includes(t.triple)), 'Source packaging manifest mismatch');
   return version;
 }
 
@@ -59,7 +67,7 @@ export function verifyBuildMetadata(release, manifest, directory) {
   const version = verifyManifest(release, manifest);
   const assets = inventory(release);
   let sha;
-  for (const target of TARGETS) {
+  for (const target of releaseTargets(release)) {
     const name = `cli-build-${target}.json`;
     const bytes = readFileSync(join(directory, name)), asset = assets.get(name);
     check(bytes.length === asset.size && digest(bytes) === asset.digest, `Asset checksum mismatch: ${name}`);
@@ -81,7 +89,7 @@ export function verifyBuildMetadata(release, manifest, directory) {
 
 export function verifyAssets(release, manifest, directory) {
   const result = verifyBuildMetadata(release, manifest, directory);
-  for (const name of names) {
+  for (const name of releaseNames(release)) {
     const bytes = readFileSync(join(directory, name)), asset = result.assets.get(name);
     check(bytes.length === asset.size && digest(bytes) === asset.digest, `Asset checksum mismatch: ${name}`);
   }
@@ -102,7 +110,7 @@ function verifyExisting(release, sourceAssets, complete) {
       && asset.digest === expected.digest, `Existing mirror asset conflicts: ${asset.name}`);
     seen.add(asset.name);
   }
-  if (complete) check(seen.size === names.length, 'Published mirror is incomplete');
+  if (complete) check(seen.size === sourceAssets.size, 'Published mirror is incomplete');
   return seen;
 }
 
@@ -117,7 +125,7 @@ function currentSource(release, assets, sha) {
 
 function mirrorNotes(release, sha) {
   check(release.body == null || typeof release.body === 'string', 'Source release notes are invalid');
-  return `CLI source: ${SOURCE}@${sha}\n\nVerified seven-platform CLI distribution.`
+  return `CLI source: ${SOURCE}@${sha}\n\nVerified ${releaseTargets(release).length}-platform CLI distribution.`
     + (release.body ? `\n\n${release.body}` : '');
 }
 
@@ -142,8 +150,8 @@ async function main() {
       JSON.parse(readFileSync(args[3], 'utf8')), resolve(args[1]));
     console.log(JSON.stringify({verified: true, source_sha: result.source_sha,
       version: result.version, declared_asset_count: result.assets.size,
-      verified_build_metadata_count: TARGETS.length,
-      verified_file_count: args[0] === '--verify-directory' ? names.length : TARGETS.length}));
+      verified_build_metadata_count: result.assets.size / 3,
+      verified_file_count: args[0] === '--verify-directory' ? result.assets.size : result.assets.size / 3}));
     return;
   }
   check(process.env.GITHUB_ACTIONS === 'true' && process.env.GITHUB_REPOSITORY === DESTINATION,
@@ -192,7 +200,7 @@ async function main() {
       mirror = synchronizeNotes(mirror, current, sha, root);
       verifyExisting(mirror, assets, true);
       Object.assign(report, {passed: true, outcome: notesChanged ? 'notes_updated' : 'unchanged',
-        verified_build_metadata_count: TARGETS.length,
+        verified_build_metadata_count: assets.size / 3,
         matching_asset_count: assets.size, mirror_release_id: mirror.id});
       return;
     }
@@ -217,7 +225,7 @@ async function main() {
       'Created mirror draft identity is invalid');
     }
     const existing = verifyExisting(mirror, assets, false);
-    const missing = names.filter(name => !existing.has(name)).map(name => join(directory, name));
+    const missing = [...assets.keys()].filter(name => !existing.has(name)).map(name => join(directory, name));
     if (missing.length) gh(['release', 'upload', release.tag_name, ...missing, '--repo', DESTINATION]);
     mirror = api(`repos/${DESTINATION}/releases/${mirror.id}`);
     verifyExisting(mirror, assets, true);
