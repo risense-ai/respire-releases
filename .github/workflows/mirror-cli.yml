@@ -37,5 +37,6 @@ jobs:
         if: always()
         with:
           name: cli-mirror-report
+          retention-days: 1
           path: ${{ runner.temp }}/cli-mirror/report.json
           if-no-files-found: error
